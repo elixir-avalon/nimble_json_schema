@@ -21,3 +21,6 @@ nimble_json_schema-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+
+# Mac users
+.DS_Store
