@@ -354,7 +354,7 @@ defmodule NimbleJsonSchema do
 
       # For atoms
       {:atom, string} when is_binary(string) ->
-        String.to_atom(string)
+        String.to_existing_atom(string)
 
       {:map, map} when is_map(map) ->
         nested_schema = Keyword.get(opts, :keys, [])
@@ -371,7 +371,7 @@ defmodule NimbleJsonSchema do
 
   defp transform_enum_value(val, values) do
     if Enum.all?(values, &is_atom/1) do
-      String.to_atom(val)
+      String.to_existing_atom(val)
     else
       val
     end
