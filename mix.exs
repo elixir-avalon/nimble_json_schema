@@ -21,6 +21,8 @@ defmodule NimbleJsonSchema.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:ex_doc, "~> 0.36", only: :dev, runtime: false},
+      {:ex_json_schema, "~> 0.10.2", only: [:test, :dev]},
       {:nimble_options, "~> 1.1"}
     ]
   end

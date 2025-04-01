@@ -663,4 +663,279 @@ defmodule NimbleJsonSchemaTest do
       assert validated[:settings][:notifications] == false
     end
   end
+
+  describe "JSON Schema validation with ExJsonSchema" do
+    test "generated JSON Schema validates correctly with ExJsonSchema" do
+      schema = [
+        name: [type: :string, required: true],
+        age: [type: :integer, default: 30],
+        roles: [type: {:list, {:in, [:admin, :user, :guest]}}, default: [:user]]
+      ]
+
+      json_schema = NimbleJsonSchema.to_json_schema(schema)
+
+      # Convert schema to use string keys for ExJsonSchema
+      json_schema_with_string_keys =
+        json_schema
+        |> JSON.encode!()
+        |> JSON.decode!()
+
+      # Resolve the schema using ExJsonSchema
+      resolved_schema = ExJsonSchema.Schema.resolve(json_schema_with_string_keys)
+
+      # Valid data
+      valid_data = %{"name" => "John", "age" => 35, "roles" => ["admin", "user"]}
+      assert ExJsonSchema.Validator.valid?(resolved_schema, valid_data)
+
+      # Invalid data - missing required field
+      invalid_data1 = %{"age" => 25}
+      refute ExJsonSchema.Validator.valid?(resolved_schema, invalid_data1)
+
+      # Invalid data - wrong type
+      invalid_data2 = %{"name" => "John", "age" => "thirty"}
+      refute ExJsonSchema.Validator.valid?(resolved_schema, invalid_data2)
+
+      # Invalid data - invalid enum value
+      invalid_data3 = %{"name" => "John", "roles" => ["superuser"]}
+      refute ExJsonSchema.Validator.valid?(resolved_schema, invalid_data3)
+    end
+
+    test "generated nested JSON Schema validates correctly" do
+      schema = [
+        user: [
+          type: :keyword_list,
+          required: true,
+          keys: [
+            name: [type: :string, required: true],
+            profile: [
+              type: :keyword_list,
+              keys: [
+                bio: [type: :string],
+                social: [
+                  type: {:list, :string}
+                ]
+              ]
+            ]
+          ]
+        ]
+      ]
+
+      json_schema = NimbleJsonSchema.to_json_schema(schema)
+
+      # Convert schema to use string keys for ExJsonSchema
+      json_schema_with_string_keys =
+        json_schema
+        |> JSON.encode!()
+        |> JSON.decode!()
+
+      # Resolve the schema using ExJsonSchema
+      resolved_schema = ExJsonSchema.Schema.resolve(json_schema_with_string_keys)
+
+      # Valid data
+      valid_data = %{
+        "user" => %{
+          "name" => "John",
+          "profile" => %{
+            "bio" => "Developer",
+            "social" => ["twitter", "github"]
+          }
+        }
+      }
+
+      assert ExJsonSchema.Validator.valid?(resolved_schema, valid_data)
+
+      # Invalid data - missing required user field
+      invalid_data1 = %{}
+      refute ExJsonSchema.Validator.valid?(resolved_schema, invalid_data1)
+
+      # Invalid data - missing required name field
+      invalid_data2 = %{"user" => %{"profile" => %{"bio" => "Developer"}}}
+      refute ExJsonSchema.Validator.valid?(resolved_schema, invalid_data2)
+
+      # Invalid data - wrong type for social
+      invalid_data3 = %{
+        "user" => %{
+          "name" => "John",
+          "profile" => %{
+            "bio" => "Developer",
+            # Should be an array
+            "social" => "twitter"
+          }
+        }
+      }
+
+      refute ExJsonSchema.Validator.valid?(resolved_schema, invalid_data3)
+    end
+  end
+
+  describe "function_spec with ExJsonSchema" do
+    test "function spec parameters validate correctly" do
+      schema = [
+        name: [type: :string, required: true, doc: "The user's name"],
+        age: [type: :integer, default: 30, doc: "The user's age"]
+      ]
+
+      function_spec =
+        NimbleJsonSchema.to_function_spec("create_user", "Create a new user", schema)
+
+      # Extract parameters schema from function spec
+      parameters_schema = function_spec["parameters"]
+
+      # Convert schema to use string keys for ExJsonSchema
+      parameters_schema_with_string_keys =
+        parameters_schema
+        |> JSON.encode!()
+        |> JSON.decode!()
+
+      # Resolve the schema using ExJsonSchema
+      resolved_schema = ExJsonSchema.Schema.resolve(parameters_schema_with_string_keys)
+
+      # Valid data
+      valid_data = %{"name" => "John", "age" => 35}
+      assert ExJsonSchema.Validator.valid?(resolved_schema, valid_data)
+
+      # Invalid data - missing required field
+      invalid_data = %{"age" => 25}
+      refute ExJsonSchema.Validator.valid?(resolved_schema, invalid_data)
+
+      # Get validation errors
+      {:error, errors} = ExJsonSchema.Validator.validate(resolved_schema, invalid_data)
+      assert length(errors) > 0
+    end
+  end
+
+  describe "end-to-end workflow" do
+    test "schema conversion, validation, and transformation" do
+      # 1. Define NimbleOptions schema
+      nimble_schema = [
+        name: [type: :string, required: true],
+        active: [type: :boolean, default: false],
+        tags: [type: {:list, :string}]
+      ]
+
+      # 2. Convert to JSON Schema
+      json_schema = NimbleJsonSchema.to_json_schema(nimble_schema)
+
+      # 3. Prepare for ExJsonSchema validation
+      json_schema_with_string_keys =
+        json_schema
+        |> JSON.encode!()
+        |> JSON.decode!()
+
+      resolved_schema = ExJsonSchema.Schema.resolve(json_schema_with_string_keys)
+
+      # 4. Mock JSON response
+      mock_json_response = %{
+        "name" => "Test User",
+        "active" => true,
+        "tags" => ["test", "user"]
+      }
+
+      # 5. Validate with ExJsonSchema
+      assert ExJsonSchema.Validator.valid?(resolved_schema, mock_json_response)
+
+      # 6. Transform the response for NimbleOptions validation
+      {:ok, transformed} =
+        NimbleJsonSchema.transform_json(mock_json_response, nimble_schema)
+
+      # 7. Validate with NimbleOptions
+      assert {:ok, validated} = NimbleOptions.validate(transformed, nimble_schema)
+
+      # 8. Verify the data
+      assert validated[:name] == "Test User"
+      assert validated[:active] == true
+      assert validated[:tags] == ["test", "user"]
+    end
+
+    test "validation errors are consistent between ExJsonSchema and NimbleOptions" do
+      # 1. Define schema with constraints
+      nimble_schema = [
+        username: [type: :string, required: true],
+        age: [type: :pos_integer]
+      ]
+
+      # 2. Convert to JSON Schema
+      json_schema = NimbleJsonSchema.to_json_schema(nimble_schema)
+
+      # 3. Prepare for ExJsonSchema validation
+      json_schema_with_string_keys =
+        json_schema
+        |> JSON.encode!()
+        |> JSON.decode!()
+
+      resolved_schema = ExJsonSchema.Schema.resolve(json_schema_with_string_keys)
+
+      # 4. Invalid JSON response - negative age for pos_integer
+      invalid_json_response = %{
+        "username" => "testuser",
+        "age" => -5
+      }
+
+      # 5. Validate with ExJsonSchema - should fail
+      refute ExJsonSchema.Validator.valid?(resolved_schema, invalid_json_response)
+
+      # 6. Transform the response for NimbleOptions validation
+      {:ok, transformed} =
+        NimbleJsonSchema.transform_json(invalid_json_response, nimble_schema)
+
+      # 7. Validate with NimbleOptions - should also fail
+      assert {:error, _} = NimbleOptions.validate(transformed, nimble_schema)
+    end
+  end
+
+  describe "schema fragments with ExJsonSchema" do
+    test "validate against schema fragments" do
+      schema = [
+        user: [
+          type: :keyword_list,
+          keys: [
+            name: [type: :string, required: true],
+            email: [type: :string, format: "email"]
+          ]
+        ],
+        settings: [
+          type: :keyword_list,
+          keys: [
+            theme: [type: {:in, ["light", "dark"]}],
+            notifications: [type: :boolean]
+          ]
+        ]
+      ]
+
+      json_schema = NimbleJsonSchema.to_json_schema(schema)
+
+      # Convert schema to use string keys for ExJsonSchema
+      json_schema_with_string_keys =
+        json_schema
+        |> JSON.encode!()
+        |> JSON.decode!()
+
+      resolved_schema = ExJsonSchema.Schema.resolve(json_schema_with_string_keys)
+
+      # Get the settings fragment
+      settings_fragment =
+        ExJsonSchema.Schema.get_fragment!(
+          resolved_schema,
+          "#/properties/settings"
+        )
+
+      # Valid settings data
+      valid_settings = %{"theme" => "dark", "notifications" => true}
+
+      assert ExJsonSchema.Validator.valid_fragment?(
+               resolved_schema,
+               settings_fragment,
+               valid_settings
+             )
+
+      # Invalid settings data
+      invalid_settings = %{"theme" => "blue", "notifications" => true}
+
+      refute ExJsonSchema.Validator.valid_fragment?(
+               resolved_schema,
+               settings_fragment,
+               invalid_settings
+             )
+    end
+  end
 end
