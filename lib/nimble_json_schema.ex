@@ -98,11 +98,9 @@ defmodule NimbleJsonSchema do
       "properties" => properties
     }
 
-    if Enum.empty?(required) do
-      json_schema
-    else
-      Map.put(json_schema, "required", required)
-    end
+    if Enum.empty?(required),
+      do: json_schema,
+      else: Map.put(json_schema, "required", required)
   end
 
   @doc """
@@ -203,7 +201,7 @@ defmodule NimbleJsonSchema do
       transformed = transform_map_to_keyword(json_response, schema)
       {:ok, transformed}
     rescue
-      e -> {:error, "Failed to transform LLM response: #{inspect(e)}"}
+      e -> {:error, "Failed to transform JSON: #{inspect(e)}"}
     end
   end
 
@@ -237,7 +235,7 @@ defmodule NimbleJsonSchema do
 
         :keyword_list ->
           nested_schema = Keyword.get(opts, :keys, []) |> to_json_schema()
-          Map.merge(base_schema, nested_schema)
+          Map.merge(base_schema, Map.put(nested_schema, "additionalProperties", false))
 
         :map ->
           # Basic map type (shorthand for {:map, :atom, :any})
@@ -248,6 +246,35 @@ defmodule NimbleJsonSchema do
           # For complex map type - in JSON Schema we treat it as an object
           nested_schema = Keyword.get(opts, :keys, []) |> to_json_schema()
           Map.merge(Map.put(base_schema, "type", "object"), nested_schema)
+
+        {:list, {:keyword_list, nested_schema}} ->
+          # Create schema for each item in the list
+          nested_properties =
+            nested_schema
+            |> Enum.map(fn {key, opts} -> {to_string(key), schema_item_to_json_schema(opts)} end)
+            |> Enum.into(%{})
+
+          nested_required =
+            nested_schema
+            |> Enum.filter(fn {_key, opts} -> Keyword.get(opts, :required, false) end)
+            |> Enum.map(fn {key, _opts} -> to_string(key) end)
+
+          item_schema = %{
+            "type" => "object",
+            "properties" => nested_properties,
+            # This is the key addition
+            "additionalProperties" => false
+          }
+
+          item_schema =
+            if Enum.empty?(nested_required),
+              do: item_schema,
+              else: Map.put(item_schema, "required", nested_required)
+
+          Map.merge(base_schema, %{
+            "type" => "array",
+            "items" => item_schema
+          })
 
         {:list, subtype} ->
           Map.merge(base_schema, %{
