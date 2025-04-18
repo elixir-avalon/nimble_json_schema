@@ -248,24 +248,24 @@ defmodule NimbleJsonSchema do
           Map.merge(Map.put(base_schema, "type", "object"), nested_schema)
 
         {:list, {:keyword_list, nested_schema}} ->
-          # Create schema for each item in the list
-          nested_properties =
-            nested_schema
-            |> Enum.map(fn {key, opts} -> {to_string(key), schema_item_to_json_schema(opts)} end)
-            |> Enum.into(%{})
-
+          # Extract required fields from the nested_schema
           nested_required =
             nested_schema
             |> Enum.filter(fn {_key, opts} -> Keyword.get(opts, :required, false) end)
             |> Enum.map(fn {key, _opts} -> to_string(key) end)
 
+          nested_properties =
+            nested_schema
+            |> Enum.map(fn {key, opts} -> {to_string(key), schema_item_to_json_schema(opts)} end)
+            |> Enum.into(%{})
+
           item_schema = %{
             "type" => "object",
             "properties" => nested_properties,
-            # This is the key addition
             "additionalProperties" => false
           }
 
+          # Add required fields if present
           item_schema =
             if Enum.empty?(nested_required),
               do: item_schema,
@@ -293,10 +293,16 @@ defmodule NimbleJsonSchema do
           base_schema
       end
 
-    # Add additional properties - important to check has_key? rather than truthy value for boolean defaults
     schema =
-      if Keyword.has_key?(opts, :default),
-        do: Map.put(schema, "default", Keyword.get(opts, :default)),
+      if Keyword.has_key?(opts, :default) do
+        Map.put(schema, "default", Keyword.get(opts, :default))
+      else
+        schema
+      end
+
+    schema =
+      if type in [:keyword_list, :map] || match?({:map, _, _}, type),
+        do: Map.put(schema, "additionalProperties", false),
         else: schema
 
     schema
